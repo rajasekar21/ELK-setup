@@ -1,0 +1,19 @@
+# Credentials and secrets
+*.p12
+*.key
+*.pem
+.env
+secrets/
+passwords.txt
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Logs
+*.log

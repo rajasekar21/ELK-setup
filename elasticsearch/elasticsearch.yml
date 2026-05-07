@@ -1,0 +1,58 @@
+# ======================== Elasticsearch Configuration =========================
+# RHEL 9 - Single Node / Cluster Setup
+# Docs: https://www.elastic.co/guide/en/elasticsearch/reference/current/settings.html
+
+# ---------------------------------- Cluster -----------------------------------
+cluster.name: elk-cluster
+
+# ------------------------------------ Node ------------------------------------
+node.name: node-1
+node.roles: [ master, data, ingest ]
+
+# ----------------------------------- Paths ------------------------------------
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+
+# ----------------------------------- Memory -----------------------------------
+# Lock the memory on startup
+bootstrap.memory_lock: true
+
+# ---------------------------------- Network -----------------------------------
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# --------------------------------- Discovery ----------------------------------
+# Single-node setup
+discovery.type: single-node
+
+# For multi-node cluster, comment out discovery.type and use:
+# discovery.seed_hosts: ["node1-ip", "node2-ip", "node3-ip"]
+# cluster.initial_master_nodes: ["node-1", "node-2", "node-3"]
+
+# ---------------------------------- Security ----------------------------------
+xpack.security.enabled: true
+xpack.security.enrollment.enabled: true
+
+xpack.security.http.ssl:
+  enabled: true
+  keystore.path: /etc/elasticsearch/certs/elasticsearch.p12
+
+xpack.security.transport.ssl:
+  enabled: true
+  verification_mode: certificate
+  keystore.path: /etc/elasticsearch/certs/elasticsearch.p12
+  truststore.path: /etc/elasticsearch/certs/elasticsearch.p12
+
+# ---------------------------------- Monitoring --------------------------------
+xpack.monitoring.collection.enabled: true
+
+# ---------------------------------- Index -------------------------------------
+# Default number of shards and replicas (adjust per environment)
+# index.number_of_shards: 1
+# index.number_of_replicas: 0
+
+# ---------------------------------- Thread Pool --------------------------------
+# Tune based on CPU cores
+# thread_pool.write.queue_size: 1000
+# thread_pool.search.queue_size: 1000

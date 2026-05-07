@@ -1,0 +1,43 @@
+# ======================== Logstash Configuration ==============================
+# RHEL 9
+# Docs: https://www.elastic.co/guide/en/logstash/current/logstash-settings-file.html
+
+# ---------------------------------- Node --------------------------------------
+node.name: logstash-1
+
+# ---------------------------------- Paths -------------------------------------
+path.data: /var/lib/logstash
+path.logs: /var/log/logstash
+path.config: /etc/logstash/conf.d
+
+# ---------------------------------- Pipeline ----------------------------------
+pipeline.id: main
+pipeline.workers: 2
+pipeline.batch.size: 125
+pipeline.batch.delay: 50
+
+# Reload pipeline config on change
+config.reload.automatic: true
+config.reload.interval: 3s
+
+# ---------------------------------- HTTP API ----------------------------------
+http.host: 127.0.0.1
+http.port: 9600
+
+# ---------------------------------- Queue -------------------------------------
+# Use persisted queue for durability
+queue.type: persisted
+queue.max_bytes: 1gb
+queue.checkpoint.writes: 1024
+
+# ---------------------------------- Dead Letter Queue -------------------------
+dead_letter_queue.enable: true
+dead_letter_queue.max_bytes: 1gb
+path.dead_letter_queue: /var/lib/logstash/dlq
+
+# ---------------------------------- Monitoring --------------------------------
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.hosts: ["https://localhost:9200"]
+xpack.monitoring.elasticsearch.username: "logstash_system"
+xpack.monitoring.elasticsearch.password: "${LOGSTASH_SYSTEM_PASSWORD}"
+xpack.monitoring.elasticsearch.ssl.certificate_authority: /etc/logstash/certs/ca.crt

@@ -1,0 +1,55 @@
+# ======================== Kibana Configuration ================================
+# RHEL 9
+# Docs: https://www.elastic.co/guide/en/kibana/current/settings.html
+
+# ---------------------------------- Server ------------------------------------
+server.port: 5601
+server.host: "0.0.0.0"
+server.name: "kibana-1"
+server.maxPayload: 1048576
+
+# Public base URL (update to match your DNS/IP)
+# server.publicBaseUrl: "https://kibana.example.com"
+
+# ---------------------------------- Elasticsearch ----------------------------
+elasticsearch.hosts: ["https://localhost:9200"]
+elasticsearch.username: "kibana_system"
+elasticsearch.password: "${KIBANA_SYSTEM_PASSWORD}"
+
+elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/certs/ca.crt"]
+elasticsearch.ssl.verificationMode: certificate
+
+# ---------------------------------- SSL (Kibana UI) --------------------------
+server.ssl.enabled: true
+server.ssl.certificate: /etc/kibana/certs/kibana.crt
+server.ssl.key: /etc/kibana/certs/kibana.key
+
+# ---------------------------------- Logging -----------------------------------
+logging:
+  appenders:
+    file:
+      type: file
+      fileName: /var/log/kibana/kibana.log
+      layout:
+        type: json
+  root:
+    appenders: [default, file]
+    level: info
+
+# ---------------------------------- Monitoring --------------------------------
+xpack.monitoring.ui.enabled: true
+monitoring.kibana.collection.enabled: true
+
+# ---------------------------------- Security ----------------------------------
+xpack.security.enabled: true
+xpack.encryptedSavedObjects.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.reporting.encryptionKey: "${KIBANA_REPORTING_KEY}"
+xpack.security.session.idleTimeout: "1h"
+xpack.security.session.lifespan: "8h"
+
+# ---------------------------------- Fleet / APM --------------------------------
+xpack.fleet.enabled: true
+xpack.apm.enabled: true
+
+# ---------------------------------- i18n -------------------------------------
+i18n.locale: "en"

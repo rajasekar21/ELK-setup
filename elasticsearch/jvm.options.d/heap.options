@@ -1,0 +1,4 @@
+# JVM heap size — set to half of available RAM, max 32g
+# These override values in the default jvm.options file
+-Xms4g
+-Xmx4g

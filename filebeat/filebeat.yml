@@ -1,0 +1,102 @@
+# ======================== Filebeat Configuration ==============================
+# RHEL 9 — Ships logs to Logstash
+# Docs: https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-reference-yml.html
+
+# ---------------------------------- Inputs ------------------------------------
+filebeat.inputs:
+  - type: filestream
+    id: syslog-input
+    enabled: true
+    paths:
+      - /var/log/messages
+      - /var/log/secure
+      - /var/log/audit/audit.log
+    fields:
+      log_type: syslog
+    fields_under_root: true
+    parsers:
+      - multiline:
+          type: pattern
+          pattern: '^[[:space:]]'
+          negate: false
+          match: after
+
+  - type: filestream
+    id: nginx-input
+    enabled: true
+    paths:
+      - /var/log/nginx/access.log
+      - /var/log/nginx/error.log
+    fields:
+      log_type: nginx
+    fields_under_root: true
+
+  - type: filestream
+    id: app-input
+    enabled: true
+    paths:
+      - /var/log/app/*.log
+    fields:
+      log_type: application
+    fields_under_root: true
+    parsers:
+      - multiline:
+          type: pattern
+          pattern: '^\d{4}-\d{2}-\d{2}'
+          negate: true
+          match: after
+
+# ---------------------------------- Modules -----------------------------------
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: true
+  reload.period: 10s
+
+# ---------------------------------- Output ------------------------------------
+# Send to Logstash (preferred for pipeline processing)
+output.logstash:
+  hosts: ["logstash-host:5044"]
+  ssl.certificate_authorities: ["/etc/filebeat/certs/ca.crt"]
+  ssl.certificate: "/etc/filebeat/certs/filebeat.crt"
+  ssl.key: "/etc/filebeat/certs/filebeat.key"
+
+# Direct to Elasticsearch (uncomment if skipping Logstash)
+# output.elasticsearch:
+#   hosts: ["https://elasticsearch-host:9200"]
+#   username: "filebeat_internal"
+#   password: "${FILEBEAT_INTERNAL_PASSWORD}"
+#   ssl.certificate_authorities: ["/etc/filebeat/certs/ca.crt"]
+
+# ---------------------------------- Processors --------------------------------
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+  - add_kubernetes_metadata: ~
+  - drop_fields:
+      fields: ["agent.ephemeral_id", "ecs.version"]
+      ignore_missing: true
+
+# ---------------------------------- Monitoring --------------------------------
+monitoring.enabled: true
+monitoring.elasticsearch:
+  hosts: ["https://localhost:9200"]
+  username: "beats_system"
+  password: "${BEATS_SYSTEM_PASSWORD}"
+  ssl.certificate_authorities: ["/etc/filebeat/certs/ca.crt"]
+
+# ---------------------------------- Logging -----------------------------------
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0640
+
+# ---------------------------------- Queue -------------------------------------
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 5s
