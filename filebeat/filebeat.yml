@@ -69,11 +69,16 @@ output.logstash:
 
 # ---------------------------------- Processors --------------------------------
 processors:
+  # Bare metal — cloud/container enrichment processors are intentionally omitted
   - add_host_metadata:
       when.not.contains.tags: forwarded
-  - add_cloud_metadata: ~
-  - add_docker_metadata: ~
-  - add_kubernetes_metadata: ~
+      netinfo.enabled: true        # capture all NIC addresses
+      geo.name: datacenter-rack-1  # physical location label (update per rack)
+  - add_fields:
+      target: server
+      fields:
+        environment: production
+        platform: bare-metal
   - drop_fields:
       fields: ["agent.ephemeral_id", "ecs.version"]
       ignore_missing: true

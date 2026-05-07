@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ELK Stack Installation Script — RHEL 9
+# ELK Stack Installation Script — RHEL 9 (Bare Metal)
 # Installs: Elasticsearch 8.x, Logstash 8.x, Kibana 8.x, Filebeat 8.x
-# Run as root or with sudo
+#
+# Assumes:
+#   - Physical server (no Docker / Kubernetes / hypervisor)
+#   - RHEL 9 minimal install with network configured
+#   - Dedicated data disk mounted at /var/lib/elasticsearch
+#   - Run as root
 # =============================================================================
 set -euo pipefail
 
@@ -22,6 +27,23 @@ if [[ "$ID" != "rhel" && "$ID" != "centos" && "$ID" != "rocky" && "$ID" != "alma
   echo "WARNING: This script is designed for RHEL 9 variants. Detected: $ID"
 fi
 
+# Require RHEL 9.x
+if [[ "${VERSION_ID%%.*}" != "9" ]]; then
+  echo "ERROR: RHEL 9 required. Detected: $VERSION_ID" >&2
+  exit 1
+fi
+
+# Confirm this is a physical host (not a container)
+if systemd-detect-virt --container &>/dev/null; then
+  echo "ERROR: Container environment detected. This script targets bare metal servers." >&2
+  exit 1
+fi
+
+echo "==> Hardware detected:"
+echo "  CPUs   : $(nproc) logical cores"
+echo "  RAM    : $(awk '/MemTotal/{printf "%.0f GB", $2/1024/1024}' /proc/meminfo)"
+echo "  Kernel : $(uname -r)"
+
 # --------------------------------------------------------------------------- #
 # 1. System prerequisites
 # --------------------------------------------------------------------------- #
@@ -33,7 +55,12 @@ dnf install -y \
   tar \
   gnupg2 \
   net-tools \
-  firewalld
+  firewalld \
+  tuned \
+  numactl \
+  irqbalance \
+  ethtool \
+  policycoreutils-python-utils
 
 # Set Java home for ELK (Elasticsearch bundles its own JDK, but Logstash may need it)
 echo 'export JAVA_HOME=/usr/lib/jvm/jre-17-openjdk' > /etc/profile.d/java.sh
@@ -74,32 +101,123 @@ echo "==> Installing Filebeat..."
 dnf install -y filebeat
 
 # --------------------------------------------------------------------------- #
-# 4. System tuning for Elasticsearch
+# 4. Bare metal OS tuning
 # --------------------------------------------------------------------------- #
-echo "==> Applying system tuning..."
+echo "==> Applying bare metal OS tuning..."
 
-# vm.max_map_count required by Elasticsearch
-sysctl -w vm.max_map_count=262144
-echo "vm.max_map_count=262144" >> /etc/sysctl.d/99-elasticsearch.conf
+# --- 4a. tuned profile (throughput-performance is optimal for ELK on bare metal)
+systemctl enable --now tuned
+tuned-adm profile throughput-performance
+echo "  tuned profile: $(tuned-adm active)"
 
-# File descriptor and thread limits
-cat >> /etc/security/limits.d/99-elasticsearch.conf << 'LIMITS'
-elasticsearch soft nofile 65535
-elasticsearch hard nofile 65535
-elasticsearch soft nproc  4096
-elasticsearch hard nproc  4096
-elasticsearch soft memlock unlimited
-elasticsearch hard memlock unlimited
+# --- 4b. Disable Transparent Huge Pages (THP)
+# THP causes latency spikes in Elasticsearch's memory allocator
+cat > /etc/systemd/system/disable-thp.service << 'THP'
+[Unit]
+Description=Disable Transparent Huge Pages
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=basic.target
+THP
+systemctl daemon-reload
+systemctl enable --now disable-thp
+echo "  THP disabled"
+
+# --- 4c. CPU governor — set to performance for consistent latency
+if ls /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor &>/dev/null; then
+  for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    echo performance > "$gov"
+  done
+  echo "  CPU governor: performance"
+else
+  echo "  WARNING: cpufreq not available — set CPU power policy to 'Performance' in BIOS"
+fi
+
+# --- 4d. Kernel / VM parameters
+cat > /etc/sysctl.d/99-elk-baremetal.conf << 'SYSCTL'
+# Elasticsearch minimum
+vm.max_map_count = 262144
+
+# Reduce swappiness — prefer RAM over swap for ELK workloads
+vm.swappiness = 1
+
+# Avoid OOM kills on large allocations
+vm.overcommit_memory = 1
+
+# Network throughput tuning for high-volume log ingestion
+net.core.rmem_max          = 134217728
+net.core.wmem_max          = 134217728
+net.core.netdev_max_backlog = 300000
+net.ipv4.tcp_rmem          = 4096 87380 134217728
+net.ipv4.tcp_wmem          = 4096 65536 134217728
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_slow_start_after_idle = 0
+
+# File system
+fs.file-max    = 2097152
+fs.inotify.max_user_watches = 524288
+SYSCTL
+sysctl --system
+echo "  Kernel parameters applied"
+
+# --- 4e. I/O scheduler — none/mq-deadline for SSDs/NVMe, deadline for HDDs
+DATA_DEV=""
+if [[ -d /var/lib/elasticsearch ]]; then
+  DATA_DEV=$(df /var/lib/elasticsearch | awk 'NR==2{print $1}' | sed 's|/dev/||;s|[0-9]*$||')
+fi
+if [[ -n "$DATA_DEV" && -f "/sys/block/${DATA_DEV}/queue/scheduler" ]]; then
+  if lsblk -d -o rota "/dev/${DATA_DEV}" 2>/dev/null | grep -q "^0"; then
+    echo "none" > "/sys/block/${DATA_DEV}/queue/scheduler"
+    echo "  I/O scheduler: none (SSD/NVMe on ${DATA_DEV})"
+  else
+    echo "mq-deadline" > "/sys/block/${DATA_DEV}/queue/scheduler" 2>/dev/null || true
+    echo "  I/O scheduler: mq-deadline (HDD on ${DATA_DEV})"
+  fi
+  # Persist across reboots via udev
+  cat > /etc/udev/rules.d/60-elk-ioscheduler.rules << UDEV
+ACTION=="add|change", KERNEL=="${DATA_DEV}", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none"
+ACTION=="add|change", KERNEL=="${DATA_DEV}", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="mq-deadline"
+UDEV
+fi
+
+# --- 4f. IRQ balancing — distribute NIC interrupts across NUMA-aware CPUs
+systemctl enable --now irqbalance
+echo "  irqbalance enabled"
+
+# --- 4g. File descriptor and thread limits
+cat > /etc/security/limits.d/99-elasticsearch.conf << 'LIMITS'
+elasticsearch  soft  nofile   1048576
+elasticsearch  hard  nofile   1048576
+elasticsearch  soft  nproc    65535
+elasticsearch  hard  nproc    65535
+elasticsearch  soft  memlock  unlimited
+elasticsearch  hard  memlock  unlimited
+logstash       soft  nofile   131072
+logstash       hard  nofile   131072
+logstash       soft  nproc    16384
+logstash       hard  nproc    16384
 LIMITS
 
-# Allow memory lock for Elasticsearch systemd unit
+# --- 4h. Allow memory lock for Elasticsearch systemd unit
 mkdir -p /etc/systemd/system/elasticsearch.service.d
 cat > /etc/systemd/system/elasticsearch.service.d/override.conf << 'OVERRIDE'
 [Service]
 LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+LimitNPROC=65535
 OVERRIDE
 
 systemctl daemon-reload
+echo "  systemd limits applied"
 
 # --------------------------------------------------------------------------- #
 # 5. Deploy configuration files
